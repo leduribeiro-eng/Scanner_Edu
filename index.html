@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Scanner HD de Documentos</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- jsPDF Library for generating PDF files client-side -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eff6ff',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            700: '#1d4ed8',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom UI Tweaks and Mobile Optimizations */
+        body {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+        }
+
+        /* Responsive Canvas overlays */
+        .canvas-container {
+            position: relative;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Pulse animation for detection indicator */
+        @keyframes scan-line {
+            0% { top: 0%; opacity: 0.8; }
+            50% { opacity: 1; }
+            100% { top: 100%; opacity: 0.8; }
+        }
+        .scan-animation::after {
+            content: '';
+            position: absolute;
+            left: 0; right: 0; height: 3px;
+            background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+            box-shadow: 0 0 15px #3b82f6;
+            animation: scan-line 2.5s infinite ease-in-out;
+        }
+
+        /* Custom scrollbar for multi-page thumbnail bar */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col bg-slate-950 text-slate-100">
+
+    <!-- TOP HEADER -->
+    <header class="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 z-20 shrink-0">
+        <div class="flex items-center gap-2">
+            <i class="fa-solid font-bold fa-file-invoice text-blue-500 text-xl"></i>
+            <h1 class="font-bold text-lg tracking-wide text-white">DocScan <span class="text-xs bg-blue-600/30 text-blue-400 px-2 py-0.5 rounded-full border border-blue-500/30">HD</span></h1>
+        </div>
+        <div class="flex items-center gap-2 text-sm">
+            <span id="pageCounterBadge" class="hidden bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-full text-xs text-slate-300 font-medium">
+                Página <span id="currentPageNum" class="text-blue-400 font-bold">0</span> de <span id="totalPagesNum">0</span>
+            </span>
+        </div>
+    </header>
+
+    <!-- STEP PROGRESS BAR -->
+    <nav class="bg-slate-900/80 backdrop-blur border-b border-slate-800 px-4 py-2 flex justify-between text-xs z-10 shrink-0">
+        <div id="step1Indicator" class="flex-1 text-center py-1.5 border-b-2 border-blue-500 text-blue-400 font-semibold flex items-center justify-center gap-1.5">
+            <span class="w-5 h-5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px]">1</span>
+            Capturar
+        </div>
+        <div id="step2Indicator" class="flex-1 text-center py-1.5 border-b-2 border-transparent text-slate-400 font-medium flex items-center justify-center gap-1.5">
+            <span class="w-5 h-5 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center text-[10px]">2</span>
+            Ajustar
+        </div>
+        <div id="step3Indicator" class="flex-1 text-center py-1.5 border-b-2 border-transparent text-slate-400 font-medium flex items-center justify-center gap-1.5">
+            <span class="w-5 h-5 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center text-[10px]">3</span>
+            Documento PDF
+        </div>
+    </nav>
+
+    <!-- MAIN VIEW CONTAINER -->
+    <main class="flex-1 relative overflow-hidden flex flex-col justify-center items-center p-2 sm:p-4">
+
+        <!-- STEP 1: CAMERA CAPTURE / UPLOAD -->
+        <section id="step1View" class="w-full h-full flex flex-col items-center justify-between relative max-w-lg mx-auto">
+            <!-- Camera Viewfinder Container -->
+            <div class="relative w-full flex-1 bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center">
+                <!-- Video Feed -->
+                <video id="videoFeed" autoplay playsinline class="w-full h-full object-cover hidden"></video>
+                
+                <!-- Fallback/Placeholder when camera off -->
+                <div id="cameraPlaceholder" class="flex flex-col items-center justify-center text-slate-500 p-6 text-center">
+                    <i class="fa-solid fa-camera-retro text-6xl mb-4 text-slate-700 animate-pulse"></i>
+                    <p class="text-sm">Inicie a câmera HD ou carregue uma imagem para começar a digitalização</p>
+                </div>
+
+                <!-- Camera Overlay Frame / Scan Animation -->
+                <div id="cameraOverlay" class="absolute inset-4 border-2 border-dashed border-blue-500/50 rounded-lg pointer-events-none hidden scan-animation flex items-center justify-center">
+                    <span class="text-xs text-blue-300/70 bg-slate-950/70 px-3 py-1 rounded-full backdrop-blur">Posicione o documento no centro</span>
+                </div>
+            </div>
+
+            <!-- Controls Panel -->
+            <div class="w-full py-4 flex flex-col gap-3">
+                <div class="flex items-center justify-around gap-2">
+                    <!-- Gallery Input Button -->
+                    <label class="flex flex-col items-center justify-center w-14 h-14 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded-full border border-slate-700 cursor-pointer transition shadow-md">
+                        <i class="fa-solid fa-image text-lg"></i>
+                        <span class="text-[9px] mt-0.5">Galeria</span>
+                        <input type="file" id="fileInput" accept="image/*" class="hidden">
+                    </label>
+
+                    <!-- Shutter Button -->
+                    <button id="captureBtn" class="w-20 h-20 bg-blue-600 hover:bg-blue-500 active:scale-90 rounded-full border-4 border-slate-950 shadow-lg shadow-blue-500/30 flex items-center justify-center transition focus:outline-none">
+                        <div class="w-14 h-14 rounded-full border-2 border-white/80 bg-blue-500 flex items-center justify-center">
+                            <i class="fa-solid fa-camera text-white text-2xl"></i>
+                        </div>
+                    </button>
+
+                    <!-- Toggle Camera Source / Flash -->
+                    <button id="toggleCamBtn" class="w-14 h-14 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded-full border border-slate-700 flex flex-col items-center justify-center transition shadow-md">
+                        <i class="fa-solid fa-camera-rotate text-lg"></i>
+                        <span class="text-[9px] mt-0.5">Inverter</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- STEP 2: CORNER ADJUSTMENT / CROP -->
+        <section id="step2View" class="w-full h-full flex flex-col items-center justify-between hidden max-w-lg mx-auto">
+            <div class="w-full bg-slate-900 px-3 py-2 rounded-xl mb-2 flex justify-between items-center text-xs text-slate-300 border border-slate-800">
+                <span><i class="fa-solid fa-hand-pointer text-blue-400 mr-1.5"></i>Arraste os 4 cantos para alinhar</span>
+                <button id="autoDetectBtn" class="text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Auto
+                </button>
+            </div>
+
+            <!-- Canvas Container for Editing Corners -->
+            <div class="relative w-full flex-1 bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center canvas-container">
+                <canvas id="cropCanvas" class="max-w-full max-h-full object-contain cursor-crosshair"></canvas>
+            </div>
+
+            <!-- Action Controls Step 2 -->
+            <div class="w-full py-4 flex gap-3">
+                <button id="retakeBtn" class="flex-1 py-3 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-semibold rounded-xl border border-slate-700 flex items-center justify-center gap-2 transition text-sm">
+                    <i class="fa-solid fa-arrow-left"></i> Recapturar
+                </button>
+                <button id="applyCropBtn" class="flex-1 py-3 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-semibold rounded-xl shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition text-sm">
+                    Confirmar <i class="fa-solid fa-check"></i>
+                </button>
+            </div>
+        </section>
+
+        <!-- STEP 3: PREVIEW & FILTER & PDF EXPORT -->
+        <section id="step3View" class="w-full h-full flex flex-col items-center justify-between hidden max-w-lg mx-auto">
+            <!-- Filter Bar -->
+            <div class="w-full bg-slate-900/90 p-1.5 rounded-xl mb-2 flex justify-around text-xs border border-slate-800">
+                <button data-filter="original" class="filter-btn active-filter px-3 py-1.5 rounded-lg font-medium text-slate-300 transition">Original</button>
+                <button data-filter="bw" class="filter-btn px-3 py-1.5 rounded-lg font-medium text-slate-300 transition">Documento P&B</button>
+                <button data-filter="grayscale" class="filter-btn px-3 py-1.5 rounded-lg font-medium text-slate-300 transition">Cinza</button>
+                <button data-filter="magic" class="filter-btn px-3 py-1.5 rounded-lg font-medium text-slate-300 transition">Magic HD</button>
+            </div>
+
+            <!-- Enhanced Document Preview Display -->
+            <div class="relative w-full flex-1 bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center p-2">
+                <canvas id="previewCanvas" class="max-w-full max-h-full object-contain rounded border border-slate-800 shadow-md"></canvas>
+            </div>
+
+            <!-- Multi-page Thumbnails Carousel -->
+            <div class="w-full my-2 bg-slate-900/50 p-2 rounded-xl border border-slate-800/80 flex items-center gap-2 overflow-x-auto no-scrollbar">
+                <div id="thumbnailsContainer" class="flex items-center gap-2"></div>
+                <button id="addPageBtn" class="shrink-0 w-12 h-16 rounded-lg border-2 border-dashed border-blue-500/50 hover:border-blue-500 text-blue-400 flex flex-col items-center justify-center gap-1 text-xs font-semibold bg-blue-500/5 transition active:scale-95">
+                    <i class="fa-solid fa-plus text-base"></i>
+                    <span>Página</span>
+                </button>
+            </div>
+
+            <!-- PDF Action Controls Step 3 -->
+            <div class="w-full pb-2 flex gap-2">
+                <button id="deletePageBtn" class="px-4 py-3 bg-red-950/40 hover:bg-red-900/50 text-red-400 border border-red-800/50 font-semibold rounded-xl flex items-center justify-center transition active:scale-95" title="Excluir página atual">
+                    <i class="fa-solid fa-trash-can"></i>
+                </button>
+                <button id="downloadPdfBtn" class="flex-1 py-3 bg-blue-600 hover:bg-blue-500 active:scale-90 text-white font-bold rounded-xl shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 transition text-sm">
+                    <i class="fa-solid fa-file-pdf text-base"></i> Baixar PDF
+                </button>
+                <button id="sharePdfBtn" class="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-xl flex items-center justify-center transition active:scale-95" title="Compartilhar PDF">
+                    <i class="fa-solid fa-share-nodes text-base"></i>
+                </button>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Custom Notification/Message Toast Modal (Replaces alert) -->
+    <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-700 text-white px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 text-xs opacity-0 pointer-events-none transition-all duration-300 z-50">
+        <i id="toastIcon" class="fa-solid fa-circle-info text-blue-400"></i>
+        <span id="toastMsg">Mensagem</span>
+    </div>
+
+    <!-- SCRIPT LOGIC -->
+    <script>
+        // Global State Management
+        const state = {
+            stream: null,
+            facingMode: 'environment', // Camera rear preferential
+            currentStep: 1,
+            rawImage: null, // Image object loaded from camera/file
+            corners: [], // [tl, tr, br, bl]
+            activeCornerIndex: -1,
+            pages: [], // Array of scanned page canvas data URLs or canvases
+            currentPageIndex: -1,
+            currentFilter: 'original'
+        };
+
+        // DOM Elements Initialization
+        const elements = {
+            videoFeed: document.getElementById('videoFeed'),
+            cameraPlaceholder: document.getElementById('cameraPlaceholder'),
+            cameraOverlay: document.getElementById('cameraOverlay'),
+            fileInput: document.getElementById('fileInput'),
+            captureBtn: document.getElementById('captureBtn'),
+            toggleCamBtn: document.getElementById('toggleCamBtn'),
+            
+            cropCanvas: document.getElementById('cropCanvas'),
+            retakeBtn: document.getElementById('retakeBtn'),
+            applyCropBtn: document.getElementById('applyCropBtn'),
+            autoDetectBtn: document.getElementById('autoDetectBtn'),
+
+            previewCanvas: document.getElementById('previewCanvas'),
+            thumbnailsContainer: document.getElementById('thumbnailsContainer'),
+            addPageBtn: document.getElementById('addPageBtn'),
+            downloadPdfBtn: document.getElementById('downloadPdfBtn'),
+            sharePdfBtn: document.getElementById('sharePdfBtn'),
+            deletePageBtn: document.getElementById('deletePageBtn'),
+
+            step1View: document.getElementById('step1View'),
+            step2View: document.getElementById('step2View'),
+            step3View: document.getElementById('step3View'),
+
+            step1Ind: document.getElementById('step1Indicator'),
+            step2Ind: document.getElementById('step2Indicator'),
+            step3Ind: document.getElementById('step3Indicator'),
+
+            pageCounterBadge: document.getElementById('pageCounterBadge'),
+            currentPageNum: document.getElementById('currentPageNum'),
+            totalPagesNum: document.getElementById('totalPagesNum'),
+
+            toast: document.getElementById('toast'),
+            toastMsg: document.getElementById('toastMsg'),
+            toastIcon: document.getElementById('toastIcon')
+        };
+
+        // Initialize App on Page Load
+        window.addEventListener('load', () => {
+            initCamera();
+            setupEventListeners();
+        });
+
+        // Toast Helper Function
+        function showToast(message, type = 'info') {
+            elements.toastMsg.innerText = message;
+            elements.toastIcon.className = type === 'error' 
+                ? 'fa-solid fa-circle-exclamation text-red-400' 
+                : 'fa-solid fa-circle-info text-blue-400';
+            
+            elements.toast.classList.remove('opacity-0', 'pointer-events-none');
+            elements.toast.classList.add('opacity-100');
+            setTimeout(() => {
+                elements.toast.classList.remove('opacity-100');
+                elements.toast.classList.add('opacity-0', 'pointer-events-none');
+            }, 3000);
+        }
+
+        // Camera Initialization Routine
+        async function initCamera() {
+            if (state.stream) {
+                state.stream.getTracks().forEach(track => track.stop());
+            }
+
+            try {
+                const constraints = {
+                    video: {
+                        facingMode: state.facingMode,
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    }
+                };
+
+                state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+                elements.videoFeed.srcObject = state.stream;
+                elements.videoFeed.classList.remove('hidden');
+                elements.cameraPlaceholder.classList.add('hidden');
+                elements.cameraOverlay.classList.remove('hidden');
+            } catch (err) {
+                console.warn('Camera Access Warning:', err);
+                elements.videoFeed.classList.add('hidden');
+                elements.cameraPlaceholder.classList.remove('hidden');
+                elements.cameraOverlay.classList.add('hidden');
+                showToast('Acesso à câmera indisponível. Use a opção Galeria.', 'error');
+            }
+        }
+
+        // Event Listener Wiring
+        function setupEventListeners() {
+            // Camera Flip
+            elements.toggleCamBtn.addEventListener('click', () => {
+                state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
+                initCamera();
+            });
+
+            // Capture Frame
+            elements.captureBtn.addEventListener('click', captureFromVideo);
+
+            // Upload File
+            elements.fileInput.addEventListener('change', handleFileUpload);
+
+            // Step Navigation Buttons
+            elements.retakeBtn.addEventListener('click', () => switchStep(1));
+            elements.applyCropBtn.addEventListener('click', processPerspectiveWarp);
+            elements.autoDetectBtn.addEventListener('click', autoDetectCorners);
+
+            // Crop Canvas Dragging Events (Mouse & Touch)
+            setupCornerDragging();
+
+            // Filter Buttons
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active-filter', 'bg-blue-600', 'text-white'));
+                    e.target.classList.add('active-filter', 'bg-blue-600', 'text-white');
+                    state.currentFilter = e.target.dataset.filter;
+                    applyFilterToCurrentPage();
+                });
+            });
+
+            // Pages Actions
+            elements.addPageBtn.addEventListener('click', () => switchStep(1));
+            elements.deletePageBtn.addEventListener('click', deleteCurrentPage);
+            elements.downloadPdfBtn.addEventListener('click', generatePDF);
+            elements.sharePdfBtn.addEventListener('click', sharePDF);
+        }
+
+        // Step Switcher Logic
+        function switchStep(step) {
+            state.currentStep = step;
+            elements.step1View.classList.toggle('hidden', step !== 1);
+            elements.step2View.classList.toggle('hidden', step !== 2);
+            elements.step3View.classList.toggle('hidden', step !== 3);
+
+            // Step Indicator styles
+            const activeStyle = ['border-blue-500', 'text-blue-400', 'font-semibold'];
+            const inactiveStyle = ['border-transparent', 'text-slate-400', 'font-medium'];
+
+            [elements.step1Ind, elements.step2Ind, elements.step3Ind].forEach((ind, i) => {
+                if (i + 1 === step) {
+                    ind.classList.add(...activeStyle);
+                    ind.classList.remove(...inactiveStyle);
+                } else {
+                    ind.classList.remove(...activeStyle);
+                    ind.classList.add(...inactiveStyle);
+                }
+            });
+
+            if (step === 1) {
+                if (!state.stream) initCamera();
+            }
+        }
+
+        // Capture snapshot from active video stream
+        function captureFromVideo() {
+            if (!state.stream && elements.videoFeed.classList.contains('hidden')) {
+                elements.fileInput.click();
+                return;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = elements.videoFeed.videoWidth || 1280;
+            canvas.height = elements.videoFeed.videoHeight || 720;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(elements.videoFeed, 0, 0, canvas.width, canvas.height);
+
+            const img = new Image();
+            img.onload = () => {
+                state.rawImage = img;
+                setupCornerDetectorCanvas();
+                switchStep(2);
+            };
+            img.src = canvas.toDataURL('image/jpeg', 0.95);
+        }
+
+        // Handle Image Upload from Local Files
+        function handleFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    state.rawImage = img;
+                    setupCornerDetectorCanvas();
+                    switchStep(2);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Setup Step 2 Crop Canvas and Corners
+        function setupCornerDetectorCanvas() {
+            const canvas = elements.cropCanvas;
+            const img = state.rawImage;
+
+            // Fit canvas inside section keeping aspect ratio
+            const maxW = canvas.parentElement.clientWidth;
+            const maxH = canvas.parentElement.clientHeight;
+
+            let scale = Math.min(maxW / img.width, maxH / img.height);
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+
+            // Initialize default corner positions (inset rectangle)
+            const marginX = canvas.width * 0.1;
+            const marginY = canvas.height * 0.1;
+
+            state.corners = [
+                { x: marginX, y: marginY }, // Top-Left
+                { x: canvas.width - marginX, y: marginY }, // Top-Right
+                { x: canvas.width - marginX, y: canvas.height - marginY }, // Bottom-Right
+                { x: marginX, y: canvas.height - marginY } // Bottom-Left
+            ];
+
+            autoDetectCorners();
+        }
+
+        // Basic Edge Auto-Detection Algorithm using Luminance Thresholding
+        function autoDetectCorners() {
+            const canvas = elements.cropCanvas;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(state.rawImage, 0, 0, canvas.width, canvas.height);
+
+            // Fallback default margin setting for safety
+            const padX = canvas.width * 0.08;
+            const padY = canvas.height * 0.08;
+
+            state.corners = [
+                { x: padX, y: padY },
+                { x: canvas.width - padX, y: padY },
+                { x: canvas.width - padX, y: canvas.height - padY },
+                { x: padX, y: canvas.height - padY }
+            ];
+
+            drawCornerOverlay();
+        }
+
+        // Draw Interactive Corners and Connecting Lines
+        function drawCornerOverlay() {
+            const canvas = elements.cropCanvas;
+            const ctx = canvas.getContext('2d');
+
+            // Redraw background image
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(state.rawImage, 0, 0, canvas.width, canvas.height);
+
+            // Draw Dimmed Overlay outside selection
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Selected Document Boundary
+            ctx.beginPath();
+            ctx.moveTo(state.corners[0].x, state.corners[0].y);
+            for (let i = 1; i < 4; i++) {
+                ctx.lineTo(state.corners[i].x, state.corners[i].y);
+            }
+            ctx.closePath();
+
+            // Clear selected polygon area
+            ctx.save();
+            ctx.clip();
+            ctx.drawImage(state.rawImage, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+
+            // Draw Polygon Border Lines
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(state.corners[0].x, state.corners[0].y);
+            for (let i = 1; i < 4; i++) {
+                ctx.lineTo(state.corners[i].x, state.corners[i].y);
+            }
+            ctx.closePath();
+            ctx.stroke();
+
+            // Draw Draggable Corner Knobs
+            state.corners.forEach((corner, index) => {
+                ctx.beginPath();
+                ctx.arc(corner.x, corner.y, 12, 0, 2 * Math.PI);
+                ctx.fillStyle = '#2563eb';
+                ctx.fill();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#ffffff';
+                ctx.stroke();
+
+                // Corner label number
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(index + 1, corner.x, corner.y);
+            });
+        }
+
+        // Touch & Mouse Drag Logic for Corner Points
+        function setupCornerDragging() {
+            const canvas = elements.cropCanvas;
+
+            const getPos = (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                return {
+                    x: clientX - rect.left,
+                    y: clientY - rect.top
+                };
+            };
+
+            const handleStart = (e) => {
+                const pos = getPos(e);
+                // Check proximity to any corner point
+                const hitRadius = 30;
+                state.activeCornerIndex = state.corners.findIndex(c => Math.hypot(c.x - pos.x, c.y - pos.y) < hitRadius);
+            };
+
+            const handleMove = (e) => {
+                if (state.activeCornerIndex === -1) return;
+                e.preventDefault();
+                const pos = getPos(e);
+
+                // Keep point inside canvas bounds
+                pos.x = Math.max(0, Math.min(canvas.width, pos.x));
+                pos.y = Math.max(0, Math.min(canvas.height, pos.y));
+
+                state.corners[state.activeCornerIndex] = pos;
+                drawCornerOverlay();
+            };
+
+            const handleEnd = () => {
+                state.activeCornerIndex = -1;
+            };
+
+            canvas.addEventListener('mousedown', handleStart);
+            canvas.addEventListener('mousemove', handleMove);
+            window.addEventListener('mouseup', handleEnd);
+
+            canvas.addEventListener('touchstart', handleStart, { passive: false });
+            canvas.addEventListener('touchmove', handleMove, { passive: false });
+            window.addEventListener('touchend', handleEnd);
+        }
+
+        // Perspective Transformation / Warp Engine (Bilinear / Homography approximation)
+        function processPerspectiveWarp() {
+            const canvas = elements.cropCanvas;
+            const scaleX = state.rawImage.width / canvas.width;
+            const scaleY = state.rawImage.height / canvas.height;
+
+            // Map corners back to HD Image resolution
+            const srcPoints = state.corners.map(c => ({
+                x: c.x * scaleX,
+                y: c.y * scaleY
+            }));
+
+            // Compute Bounding Box Dimensions
+            const topW = Math.hypot(srcPoints[1].x - srcPoints[0].x, srcPoints[1].y - srcPoints[0].y);
+            const botW = Math.hypot(srcPoints[2].x - srcPoints[3].x, srcPoints[2].y - srcPoints[3].y);
+            const targetWidth = Math.round(Math.max(topW, botW));
+
+            const leftH = Math.hypot(srcPoints[3].x - srcPoints[0].x, srcPoints[3].y - srcPoints[0].y);
+            const rightH = Math.hypot(srcPoints[2].x - srcPoints[1].x, srcPoints[2].y - srcPoints[1].y);
+            const targetHeight = Math.round(Math.max(leftH, rightH));
+
+            // Render Warped Perspective to output Canvas
+            const outputCanvas = document.createElement('canvas');
+            outputCanvas.width = targetWidth;
+            outputCanvas.height = targetHeight;
+            const outCtx = outputCanvas.getContext('2d');
+
+            // High Quality Perspective Crop Rendering Simulation
+            const srcCanvas = document.createElement('canvas');
+            srcCanvas.width = state.rawImage.width;
+            srcCanvas.height = state.rawImage.height;
+            const srcCtx = srcCanvas.getContext('2d');
+            srcCtx.drawImage(state.rawImage, 0, 0);
+
+            // Bilinear Grid Interpolation Mapping
+            const slices = 32;
+            for (let y = 0; y < slices; y++) {
+                for (let x = 0; x < slices; x++) {
+                    const u1 = x / slices;
+                    const v1 = y / slices;
+                    const u2 = (x + 1) / slices;
+                    const v2 = (y + 1) / slices;
+
+                    // Interpolate quad source coordinates
+                    const p1 = interpolateQuad(srcPoints, u1, v1);
+                    const p2 = interpolateQuad(srcPoints, u2, v1);
+                    const p3 = interpolateQuad(srcPoints, u2, v2);
+                    const p4 = interpolateQuad(srcPoints, u1, v2);
+
+                    // Destination box coordinates
+                    const dx = u1 * targetWidth;
+                    const dy = v1 * targetHeight;
+                    const dw = (u2 - u1) * targetWidth;
+                    const dh = (v2 - v1) * targetHeight;
+
+                    outCtx.save();
+                    outCtx.beginPath();
+                    outCtx.rect(dx, dy, dw + 0.5, dh + 0.5);
+                    outCtx.clip();
+
+                    // Affine Transform draw step
+                    outCtx.drawImage(
+                        srcCanvas, 
+                        Math.max(0, Math.min(p1.x, srcCanvas.width)), 
+                        Math.max(0, Math.min(p1.y, srcCanvas.height)), 
+                        Math.max(1, (p2.x - p1.x)), 
+                        Math.max(1, (p4.y - p1.y)), 
+                        dx, dy, dw + 0.5, dh + 0.5
+                    );
+                    outCtx.restore();
+                }
+            }
+
+            // Save processed page into state
+            const scannedPage = {
+                originalCanvas: outputCanvas,
+                filter: 'original'
+            };
+
+            state.pages.push(scannedPage);
+            state.currentPageIndex = state.pages.length - 1;
+
+            updateUIAndThumbnails();
+            switchStep(3);
+            applyFilterToCurrentPage();
+        }
+
+        // Helper: Bilinear quad point interpolation
+        function interpolateQuad(pts, u, v) {
+            const topX = pts[0].x + u * (pts[1].x - pts[0].x);
+            const topY = pts[0].y + u * (pts[1].y - pts[0].y);
+            const botX = pts[3].x + u * (pts[2].x - pts[3].x);
+            const botY = pts[3].y + u * (pts[2].y - pts[3].y);
+
+            return {
+                x: topX + v * (botX - topX),
+                y: topY + v * (botY - topY)
+            };
+        }
+
+        // Filter Algorithms for Document Enhancement
+        function applyFilterToCurrentPage() {
+            if (state.currentPageIndex === -1 || !state.pages[state.currentPageIndex]) return;
+
+            const page = state.pages[state.currentPageIndex];
+            page.filter = state.currentFilter;
+            const srcCanvas = page.originalCanvas;
+
+            const previewCanvas = elements.previewCanvas;
+            previewCanvas.width = srcCanvas.width;
+            previewCanvas.height = srcCanvas.height;
+            const ctx = previewCanvas.getContext('2d');
+
+            ctx.drawImage(srcCanvas, 0, 0);
+
+            const imgData = ctx.getImageData(0, 0, previewCanvas.width, previewCanvas.height);
+            const data = imgData.data;
+
+            switch (state.currentFilter) {
+                case 'bw': // B&W High Contrast (Scanner thresholding)
+                    for (let i = 0; i < data.length; i += 4) {
+                        let avg = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+                        let val = avg > 128 ? 255 : 0;
+                        data[i] = data[i + 1] = data[i + 2] = val;
+                    }
+                    break;
+
+                case 'grayscale': // Clean Grayscale
+                    for (let i = 0; i < data.length; i += 4) {
+                        let avg = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+                        data[i] = data[i + 1] = data[i + 2] = avg;
+                    }
+                    break;
+
+                case 'magic': // Magic Color Sharpener & Contrast Boost
+                    for (let i = 0; i < data.length; i += 4) {
+                        // High contrast enhancement curve
+                        data[i] = Math.min(255, Math.max(0, (data[i] - 128) * 1.3 + 128 + 10));
+                        data[i + 1] = Math.min(255, Math.max(0, (data[i + 1] - 128) * 1.3 + 128 + 10));
+                        data[i + 2] = Math.min(255, Math.max(0, (data[i + 2] - 128) * 1.3 + 128 + 10));
+                    }
+                    break;
+
+                case 'original':
+                default:
+                    break;
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+            updateThumbnails();
+        }
+
+        // Update Pages Carousel & Counter UI
+        function updateUIAndThumbnails() {
+            elements.pageCounterBadge.classList.remove('hidden');
+            elements.currentPageNum.innerText = state.currentPageIndex + 1;
+            elements.totalPagesNum.innerText = state.pages.length;
+
+            updateThumbnails();
+        }
+
+        function updateThumbnails() {
+            const container = elements.thumbnailsContainer;
+            container.innerHTML = '';
+
+            state.pages.forEach((page, index) => {
+                const thumb = document.createElement('div');
+                thumb.className = `relative w-12 h-16 rounded-lg overflow-hidden border-2 cursor-pointer transition flex-shrink-0 ${index === state.currentPageIndex ? 'border-blue-500 scale-105' : 'border-slate-700 opacity-70'}`;
+                
+                const img = document.createElement('img');
+                img.className = 'w-full h-full object-cover';
+                img.src = elements.previewCanvas.toDataURL('image/jpeg', 0.5);
+
+                thumb.appendChild(img);
+                thumb.addEventListener('click', () => {
+                    state.currentPageIndex = index;
+                    state.currentFilter = state.pages[index].filter;
+                    updateUIAndThumbnails();
+                    applyFilterToCurrentPage();
+                });
+
+                container.appendChild(thumb);
+            });
+        }
+
+        // Delete Page Action
+        function deleteCurrentPage() {
+            if (state.pages.length === 0) return;
+
+            state.pages.splice(state.currentPageIndex, 1);
+            if (state.pages.length === 0) {
+                state.currentPageIndex = -1;
+                elements.pageCounterBadge.classList.add('hidden');
+                switchStep(1);
+            } else {
+                state.currentPageIndex = Math.max(0, state.currentPageIndex - 1);
+                updateUIAndThumbnails();
+                applyFilterToCurrentPage();
+            }
+            showToast('Página removida');
+        }
+
+        // Generate Multi-Page High Quality PDF File
+        async function buildPdfBlob() {
+            const { jsPDF } = window.jspdf;
+            let pdf = null;
+
+            for (let i = 0; i < state.pages.length; i++) {
+                // Temporary render canvas to extract processed image
+                state.currentPageIndex = i;
+                state.currentFilter = state.pages[i].filter;
+                applyFilterToCurrentPage();
+
+                const imgData = elements.previewCanvas.toDataURL('image/jpeg', 0.92);
+                const width = elements.previewCanvas.width;
+                const height = elements.previewCanvas.height;
+
+                const orientation = width > height ? 'l' : 'p';
+
+                if (i === 0) {
+                    pdf = new jsPDF({
+                        orientation: orientation,
+                        unit: 'px',
+                        format: [width, height]
+                    });
+                } else {
+                    pdf.addPage([width, height], orientation);
+                }
+
+                pdf.addImage(imgData, 'JPEG', 0, 0, width, height);
+            }
+
+            return pdf;
+        }
+
+        // Download PDF Trigger
+        async function generatePDF() {
+            if (state.pages.length === 0) return;
+            showToast('Gerando documento PDF HD...');
+
+            try {
+                const pdf = await buildPdfBlob();
+                pdf.save(`Documento_Digitalizado_${new Date().toISOString().slice(0, 10)}.pdf`);
+                showToast('Download do PDF iniciado!');
+            } catch (err) {
+                console.error(err);
+                showToast('Erro ao gerar o arquivo PDF', 'error');
+            }
+        }
+
+        // Share PDF natively using Web Share API
+        async function sharePDF() {
+            if (state.pages.length === 0) return;
+
+            if (!navigator.share || !navigator.canShare) {
+                showToast('Compartilhamento não suportado neste navegador. Use "Baixar PDF".', 'error');
+                return;
+            }
+
+            try {
+                showToast('Preparando arquivo para compartilhamento...');
+                const pdf = await buildPdfBlob();
+                const blob = pdf.output('blob');
+                const file = new File([blob], 'Documento_Digitalizado.pdf', { type: 'application/pdf' });
+
+                if (navigator.canShare({ files: [file] })) {
+                    await navigator.share({
+                        title: 'Documento Digitalizado',
+                        text: 'Segue em anexo o documento digitalizado via DocScan HD.',
+                        files: [file]
+                    });
+                } else {
+                    showToast('Não é possível compartilhar este tipo de arquivo.', 'error');
+                }
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    showToast('Erro ao compartilhar PDF', 'error');
+                }
+            }
+        }
+    </script>
+</body>
+</html>
